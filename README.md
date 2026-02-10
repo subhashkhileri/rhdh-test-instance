@@ -97,6 +97,13 @@ For local development and testing environments, you can deploy RHDH directly to 
 > **Note: Bring Your Own Cluster (BYOC)**  
 > Local deployment requires you to have access to your own OpenShift cluster.
 
+### Prerequisites
+
+- `oc` CLI logged into your OpenShift cluster
+- `helm` CLI installed
+- `make` installed
+- `.env` file configured with Keycloak credentials (copy from `.env.example`)
+
 ### Quick Start
 
 1. **Clone the repository:**
@@ -105,48 +112,87 @@ For local development and testing environments, you can deploy RHDH directly to 
    cd rhdh-test-instance
    ```
 
-2. **Deploy RHDH with Helm:**
+2. **Configure environment:**
    ```bash
-   ./install.sh helm 1.5-171-CI
+   cp .env.example .env
+   # Edit .env with your Keycloak credentials
    ```
 
-3. **Or deploy with the latest main version:**
+3. **Deploy RHDH:**
    ```bash
-   ./install.sh helm 1.7
+   make deploy-helm VERSION=1.9-190-CI
    ```
 
 4. **Access your RHDH instance:**
-   The script will output the URL where your RHDH instance is accessible.
+   ```bash
+   make url
+   ```
 
-### Installation Methods
+### Make Commands
 
-#### Method 1: Helm Chart Installation
+Run `make help` to see all available commands.
+
+#### Deploy
 
 ```bash
-./install.sh helm <version>
+# Helm
+make deploy-helm VERSION=1.9-190-CI
+make deploy-helm VERSION=1.9-190-CI NAMESPACE=my-rhdh
+
+# Helm + Orchestrator
+make deploy-helm-orch VERSION=1.9-190-CI
+
+# Operator (runs inside e2e-runner container)
+make deploy-operator VERSION=1.9 OC_LOGIN="oc login --token=<token> --server=<server>"
+
+# Operator + Orchestrator
+make deploy-operator-orch VERSION=1.9 OC_LOGIN="oc login --token=<token> --server=<server>"
 ```
 
-**Available versions:**
-- `1.7` - Latest stable 1.7 version
-- `1.6` - Latest stable 1.6 version
-- `1.5` - Latest stable 1.5 version
-- `1.7-98-CI` - Specific CI build
-- `1.6-45-CI` - Specific CI build
+#### Cleanup
 
-**Example:**
 ```bash
-./install.sh helm 1.7
+make undeploy-helm                    # Remove Helm release
+make undeploy-operator                # Remove Operator deployment
+make undeploy-infra                   # Remove orchestrator infra chart
+make clean                            # Delete the entire namespace
 ```
 
-#### Method 2: Operator Installation
+#### Status and Debugging
 
 ```bash
-./install.sh operator <version> 
+make status                           # Pods, helm releases, operator versions
+make logs                             # Tail RHDH pod logs
+make url                              # Print RHDH URL
 ```
 
-**Example:**
+#### Configuration
+
+All make commands accept these variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NAMESPACE` | `rhdh` | Target namespace |
+| `VERSION` | `1.9` | RHDH version to deploy |
+| `OC_LOGIN` | - | `oc login` command (required for operator targets) |
+| `RUNNER_IMAGE` | `quay.io/rhdh-community/rhdh-e2e-runner:main` | Container image for operator deploys |
+
+> **Note:** Operator deployment requires Linux tools (`umoci`, etc.) not available on macOS.
+> The operator targets automatically run inside the `rhdh-e2e-runner` container which has all dependencies.
+
+### Direct Script Usage
+
+You can also use `deploy.sh` directly:
+
 ```bash
-./install.sh operator 1.7
+./deploy.sh <installation-method> <version> [--namespace <ns>] [--with-orchestrator]
+```
+
+**Examples:**
+```bash
+./deploy.sh helm 1.9-190-CI
+./deploy.sh helm 1.9 --namespace rhdh-helm --with-orchestrator
+./deploy.sh operator 1.9 --namespace rhdh-operator
 ```
 
 ### Accessing Your Local RHDH Instance
