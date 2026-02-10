@@ -43,6 +43,6 @@ catalog:
         clientId: "${KEYCLOAK_CLIENT_ID}"
         clientSecret: "${KEYCLOAK_CLIENT_SECRET}"
         schedule:
-          frequency: { minutes: 3 }
+          frequency: { minutes: 20 }
           initialDelay: { seconds: 15 }
           timeout: { minutes: 5 }
