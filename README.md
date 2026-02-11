@@ -136,17 +136,18 @@ Run `make help` to see all available commands.
 
 ```bash
 # Helm
-make deploy-helm VERSION=1.9-190-CI
-make deploy-helm VERSION=1.9-190-CI NAMESPACE=my-rhdh
+make deploy-helm VERSION=1.9
+make deploy-helm VERSION=1.9 NAMESPACE=my-rhdh
 
 # Helm + Orchestrator
-make deploy-helm-orch VERSION=1.9-190-CI
+make deploy-helm VERSION=1.9 ORCH=1
 
-# Operator (runs inside e2e-runner container)
-make deploy-operator VERSION=1.9 OC_LOGIN="oc login --token=<token> --server=<server>"
+# Operator (one-time operator install, then deploy instance)
+make install-operator VERSION=1.9 OC_LOGIN="oc login --token=<token> --server=<server>"
+make deploy-operator VERSION=1.9
 
 # Operator + Orchestrator
-make deploy-operator-orch VERSION=1.9 OC_LOGIN="oc login --token=<token> --server=<server>"
+make deploy-operator VERSION=1.9 ORCH=1
 ```
 
 #### Cleanup
@@ -173,12 +174,14 @@ All make commands accept these variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `NAMESPACE` | `rhdh` | Target namespace |
-| `VERSION` | `1.9` | RHDH version to deploy |
-| `OC_LOGIN` | - | `oc login` command (required for operator targets) |
-| `RUNNER_IMAGE` | `quay.io/rhdh-community/rhdh-e2e-runner:main` | Container image for operator deploys |
+| `VERSION` | `1.9` | RHDH version (`1.9`, `1.9-190-CI`, or `next`) |
+| `ORCH` | `0` | Set to `1` to deploy with orchestrator support |
+| `CATALOG_INDEX_TAG` | auto | Catalog index image tag (defaults to major.minor from version, or `next`) |
+| `OC_LOGIN` | - | `oc login` command (required for `install-operator` only) |
+| `RUNNER_IMAGE` | `quay.io/rhdh-community/rhdh-e2e-runner:main` | Container image for `install-operator` |
 
-> **Note:** Operator deployment requires Linux tools (`umoci`, etc.) not available on macOS.
-> The operator targets automatically run inside the `rhdh-e2e-runner` container which has all dependencies.
+> **Note:** Only `install-operator` requires the e2e-runner container (needs Linux tools like `umoci`, `opm`, `skopeo`).
+> The operator is installed once per cluster. After that, `deploy-operator` runs locally like `deploy-helm`.
 
 ### Direct Script Usage
 
@@ -190,9 +193,12 @@ You can also use `deploy.sh` directly:
 
 **Examples:**
 ```bash
+./deploy.sh helm 1.9
 ./deploy.sh helm 1.9-190-CI
+./deploy.sh helm next
 ./deploy.sh helm 1.9 --namespace rhdh-helm --with-orchestrator
 ./deploy.sh operator 1.9 --namespace rhdh-operator
+./deploy.sh operator next --with-orchestrator
 ```
 
 ### Accessing Your Local RHDH Instance
@@ -243,9 +249,13 @@ Configure dynamic plugins in `config/dynamic-plugins.yaml`:
 includes:
   - dynamic-plugins.default.yaml
 plugins:
-  - package: ./dynamic-plugins/dist/backstage-community-plugin-catalog-backend-module-keycloak-dynamic
+  - package: 'oci://registry.access.redhat.com/rhdh/backstage-community-plugin-catalog-backend-module-keycloak:{{inherit}}'
     disabled: false
 ```
+
+Orchestrator plugins are configured separately in `config/orchestrator-dynamic-plugins.yaml` and merged automatically when `ORCH=1` is set.
+
+> **Note:** The `{{inherit}}` tag resolves the plugin version from the catalog index image at runtime.
 
 ### Helm Values
 
@@ -291,19 +301,26 @@ Keycloak is configured with:
 ```
 rhdh-test-instance/
 ├── config/
-│   ├── app-config-rhdh.yaml      # Main RHDH configuration
-│   ├── dynamic-plugins.yaml      # Dynamic plugins configuration
-│   └── rhdh-secrets.yaml         # Kubernetes secrets template
+│   ├── app-config-rhdh.yaml                # Main RHDH configuration
+│   ├── dynamic-plugins.yaml                # Dynamic plugins configuration
+│   ├── orchestrator-dynamic-plugins.yaml   # Orchestrator plugins (merged when ORCH=1)
+│   └── rhdh-secrets.yaml                   # Kubernetes secrets template
 ├── helm/
-│   └── value_file.yaml           # Helm chart values
+│   ├── deploy.sh                           # Helm deployment script
+│   └── value_file.yaml                     # Helm chart values
+├── operator/
+│   ├── install-operator.sh                 # One-time operator installation (runs in container)
+│   ├── deploy.sh                           # Operator instance deployment
+│   └── subscription.yaml                   # Backstage CR template
 ├── utils/
 │   └── keycloak/
-│       ├── keycloak-deploy.sh    # Keycloak deployment script
-│       ├── keycloak-values.yaml  # Keycloak Helm values
-│       └── rhdh-client.json      # Keycloak client configuration
-├── install.sh                    # Main installation script
-├── OWNERS                        # Project maintainers
-└── README.md                     # This file
+│       ├── keycloak-deploy.sh              # Keycloak deployment script
+│       ├── keycloak-values.yaml            # Keycloak Helm values
+│       └── rhdh-client.json               # Keycloak client configuration
+├── deploy.sh                               # Main entry point
+├── Makefile                                # Make targets
+├── OWNERS                                  # Project maintainers
+└── README.md                               # This file
 ```
 
 ## Environment Variables

@@ -27,6 +27,14 @@ fi
 
 echo "Using Helm chart version: ${CV}"
 
+# Catalog index tag defaults to the major.minor version, or "next" for next
+if [[ "$version" == "next" ]]; then
+    CATALOG_INDEX_TAG="${CATALOG_INDEX_TAG:-next}"
+else
+    CATALOG_INDEX_TAG="${CATALOG_INDEX_TAG:-$(echo "$version" | grep -oE '^[0-9]+\.[0-9]+')}"
+fi
+echo "Using catalog index tag: ${CATALOG_INDEX_TAG}"
+
 CHART_URL="oci://quay.io/rhdh/chart"
 if ! helm show chart $CHART_URL --version $CV &> /dev/null; then github=1; fi
 if [[ $github -eq 1 ]]; then
@@ -37,7 +45,13 @@ fi
 echo "Using ${CHART_URL} to install Helm chart"
 
 # RHDH URL
-export RHDH_BASE_URL="http://redhat-developer-hub-${namespace}.${CLUSTER_ROUTER_BASE}"
+# Detect protocol based on cluster route TLS configuration
+if oc get route console -n openshift-console -o=jsonpath='{.spec.tls.termination}' 2>/dev/null | grep -q .; then
+    RHDH_PROTOCOL="https"
+else
+    RHDH_PROTOCOL="http"
+fi
+export RHDH_BASE_URL="${RHDH_PROTOCOL}://redhat-developer-hub-${namespace}.${CLUSTER_ROUTER_BASE}"
 
 # Apply secrets
 envsubst < config/rhdh-secrets.yaml | oc apply -f - --namespace="$namespace"
@@ -74,7 +88,8 @@ DYNAMIC_PLUGINS_FILE=$(mktemp)
 trap "rm -f $DYNAMIC_PLUGINS_FILE" EXIT
 echo "global:" > "$DYNAMIC_PLUGINS_FILE"
 echo "  dynamic:" >> "$DYNAMIC_PLUGINS_FILE"
-sed 's/^/    /' config/dynamic-plugins.yaml >> "$DYNAMIC_PLUGINS_FILE"
+# Escape {{inherit}} for Helm's Go template engine: {{inherit}} -> {{ "{{inherit}}" }}
+sed -e 's/^/    /' -e 's/{{inherit}}/{{ "{{inherit}}" }}/g' config/dynamic-plugins.yaml >> "$DYNAMIC_PLUGINS_FILE"
 
 # Build helm install arguments
 HELM_ARGS=(
@@ -83,7 +98,7 @@ HELM_ARGS=(
     --set global.clusterRouterBase="${CLUSTER_ROUTER_BASE}"
     --set global.catalogIndex.image.registry="quay.io"
     --set global.catalogIndex.image.repository="rhdh/plugin-catalog-index"
-    --set global.catalogIndex.image.tag="1.10"
+    --set global.catalogIndex.image.tag="${CATALOG_INDEX_TAG}"
     --namespace "$namespace"
 )
 

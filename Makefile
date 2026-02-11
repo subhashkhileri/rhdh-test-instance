@@ -1,23 +1,30 @@
 NAMESPACE ?= rhdh
 VERSION ?= 1.9
+ORCH ?= 0
+CATALOG_INDEX_TAG ?=
 RUNNER_IMAGE ?= quay.io/rhdh-community/rhdh-e2e-runner:main
 OC_LOGIN ?=
 
+export CATALOG_INDEX_TAG
+
+# Build deploy flags
+DEPLOY_FLAGS = --namespace $(NAMESPACE)
+ifeq ($(ORCH),1)
+DEPLOY_FLAGS += --with-orchestrator
+endif
+
 # ── Deploy ────────────────────────────────────────────────────────────────────
 
-.PHONY: deploy-helm deploy-helm-orch deploy-operator deploy-operator-orch
+.PHONY: deploy-helm install-operator deploy-operator
 
-deploy-helm: ## Deploy RHDH via Helm
-	./deploy.sh helm $(VERSION) --namespace $(NAMESPACE)
+deploy-helm: ## Deploy RHDH via Helm (ORCH=1 for orchestrator)
+	./deploy.sh helm $(VERSION) $(DEPLOY_FLAGS)
 
-deploy-helm-orch: ## Deploy RHDH via Helm with orchestrator
-	./deploy.sh helm $(VERSION) --namespace $(NAMESPACE) --with-orchestrator
+install-operator: ## Install RHDH operator on cluster (one-time, requires OC_LOGIN)
+	$(MAKE) run-in-runner CMD="source operator/install-operator.sh $(VERSION)"
 
-deploy-operator: ## Deploy RHDH via Operator (requires runner)
-	$(MAKE) run-in-runner CMD="./deploy.sh operator $(VERSION) --namespace $(NAMESPACE)"
-
-deploy-operator-orch: ## Deploy RHDH via Operator with orchestrator (requires runner)
-	$(MAKE) run-in-runner CMD="./deploy.sh operator $(VERSION) --namespace $(NAMESPACE) --with-orchestrator"
+deploy-operator: ## Deploy RHDH instance via Operator (ORCH=1 for orchestrator)
+	./deploy.sh operator $(VERSION) $(DEPLOY_FLAGS)
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 
