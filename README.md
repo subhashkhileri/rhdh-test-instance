@@ -97,6 +97,13 @@ For local development and testing environments, you can deploy RHDH directly to 
 > **Note: Bring Your Own Cluster (BYOC)**  
 > Local deployment requires you to have access to your own OpenShift cluster.
 
+### Prerequisites
+
+- `oc` CLI logged into your OpenShift cluster
+- `helm` CLI installed
+- `make` installed
+- `.env` file configured with Keycloak credentials (copy from `.env.example`)
+
 ### Quick Start
 
 1. **Clone the repository:**
@@ -105,48 +112,94 @@ For local development and testing environments, you can deploy RHDH directly to 
    cd rhdh-test-instance
    ```
 
-2. **Deploy RHDH with Helm:**
+2. **Configure environment:**
    ```bash
-   ./install.sh helm 1.5-171-CI
+   cp .env.example .env
+   # Edit .env with your Keycloak credentials
    ```
 
-3. **Or deploy with the latest main version:**
+3. **Deploy RHDH:**
    ```bash
-   ./install.sh helm 1.7
+   make deploy-helm VERSION=1.9-190-CI
    ```
 
 4. **Access your RHDH instance:**
-   The script will output the URL where your RHDH instance is accessible.
+   ```bash
+   make url
+   ```
 
-### Installation Methods
+### Make Commands
 
-#### Method 1: Helm Chart Installation
+Run `make help` to see all available commands.
+
+#### Deploy
 
 ```bash
-./install.sh helm <version>
+# Helm
+make deploy-helm VERSION=1.9
+make deploy-helm VERSION=1.9 NAMESPACE=my-rhdh
+
+# Helm + Orchestrator
+make deploy-helm VERSION=1.9 ORCH=true
+
+# Operator (one-time operator install, then deploy instance)
+make install-operator VERSION=1.9
+make deploy-operator VERSION=1.9
+
+# Operator + Orchestrator
+make deploy-operator VERSION=1.9 ORCH=true
 ```
 
-**Available versions:**
-- `1.7` - Latest stable 1.7 version
-- `1.6` - Latest stable 1.6 version
-- `1.5` - Latest stable 1.5 version
-- `1.7-98-CI` - Specific CI build
-- `1.6-45-CI` - Specific CI build
+#### Cleanup
 
-**Example:**
 ```bash
-./install.sh helm 1.7
+make undeploy-helm                    # Remove Helm release
+make undeploy-operator                # Remove Operator deployment
+make undeploy-infra                   # Remove orchestrator infra chart
+make clean                            # Delete the entire namespace
 ```
 
-#### Method 2: Operator Installation
+#### Status and Debugging
 
 ```bash
-./install.sh operator <version> 
+make status                           # Pods, helm releases, operator versions
+make logs                             # Tail RHDH pod logs
+make url                              # Print RHDH URL
 ```
 
-**Example:**
+#### Configuration
+
+All make commands accept these variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NAMESPACE` | `rhdh` | Target namespace |
+| `VERSION` | `1.9` | RHDH version (`1.9`, `1.9-190-CI`, or `next`) |
+| `ORCH` | `false` | Set to `true` to deploy with orchestrator support |
+| `USE_CONTAINER` | `false` | Set to `true` to run commands inside the e2e-runner container |
+| `CATALOG_INDEX_TAG` | auto | Catalog index image tag (defaults to major.minor from version, or `next`) |
+| `RUNNER_IMAGE` | `quay.io/rhdh-community/rhdh-e2e-runner:main` | Container image for `install-operator` |
+
+> **Note:** `install-operator` requires you to be logged into the cluster via `oc login` on your host.
+> It automatically passes the session token to the e2e-runner container (needs Linux tools like `umoci`, `opm`, `skopeo`).
+> The operator is installed once per cluster. After that, `deploy-operator` runs locally like `deploy-helm`.
+
+### Direct Script Usage
+
+You can also use `deploy.sh` directly:
+
 ```bash
-./install.sh operator 1.7
+./deploy.sh <installation-method> <version> [--namespace <ns>] [--with-orchestrator]
+```
+
+**Examples:**
+```bash
+./deploy.sh helm 1.9
+./deploy.sh helm 1.9-190-CI
+./deploy.sh helm next
+./deploy.sh helm 1.9 --namespace rhdh-helm --with-orchestrator
+./deploy.sh operator 1.9 --namespace rhdh-operator
+./deploy.sh operator next --with-orchestrator
 ```
 
 ### Accessing Your Local RHDH Instance
@@ -201,6 +254,10 @@ plugins:
     disabled: false
 ```
 
+Orchestrator plugins are configured separately in `config/orchestrator-dynamic-plugins.yaml` and merged automatically when `ORCH=true` is set.
+
+> **Note:** The `{{inherit}}` tag resolves the plugin version from the catalog index image at runtime.
+
 ### Helm Values
 
 Customize deployment in `helm/value_file.yaml`:
@@ -231,8 +288,8 @@ The following test users are created automatically:
 
 | Username | Password | Email | Role |
 |----------|----------|--------|------|
-| test1 | test1@123 | test1@redhat.com | User |
-| test2 | test2@123 | test2@redhat.com | User |
+| test1 | test1@123 | test1@example.com | User |
+| test2 | test2@123 | test2@example.com | User |
 
 ### Keycloak Configuration
 
@@ -245,19 +302,28 @@ Keycloak is configured with:
 ```
 rhdh-test-instance/
 ├── config/
-│   ├── app-config-rhdh.yaml      # Main RHDH configuration
-│   ├── dynamic-plugins.yaml      # Dynamic plugins configuration
-│   └── rhdh-secrets.yaml         # Kubernetes secrets template
+│   ├── app-config-rhdh.yaml                # Main RHDH configuration
+│   ├── dynamic-plugins.yaml                # Dynamic plugins configuration
+│   ├── orchestrator-dynamic-plugins.yaml   # Orchestrator plugins (merged when ORCH=true)
+│   └── rhdh-secrets.yaml                   # Kubernetes secrets template
 ├── helm/
-│   └── value_file.yaml           # Helm chart values
+│   ├── deploy.sh                           # Helm deployment script
+│   └── value_file.yaml                     # Helm chart values
+├── operator/
+│   ├── install-operator.sh                 # One-time operator installation (runs in container)
+│   ├── deploy.sh                           # Operator instance deployment
+│   └── subscription.yaml                   # Backstage CR template
 ├── utils/
 │   └── keycloak/
-│       ├── keycloak-deploy.sh    # Keycloak deployment script
-│       ├── keycloak-values.yaml  # Keycloak Helm values
-│       └── rhdh-client.json      # Keycloak client configuration
-├── install.sh                    # Main installation script
-├── OWNERS                        # Project maintainers
-└── README.md                     # This file
+│       ├── keycloak-deploy.sh              # Keycloak deployment script
+│       ├── keycloak-values.yaml            # Keycloak Helm values
+│       ├── rhdh-client.json               # Keycloak client configuration
+│       ├── users.json                     # Test users configuration
+│       └── groups.json                    # Groups configuration
+├── deploy.sh                               # Main entry point
+├── Makefile                                # Make targets
+├── OWNERS                                  # Project maintainers
+└── README.md                               # This file
 ```
 
 ## Environment Variables

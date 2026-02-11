@@ -15,6 +15,11 @@ spec:
       enabled: true
     dynamicPluginsConfigMapName: dynamic-plugins
     extraEnvs:
+      envs:
+        - name: RHDH_BASE_URL
+          value: "${RHDH_BASE_URL}"
+        - name: CATALOG_INDEX_IMAGE
+          value: "quay.io/rhdh/plugin-catalog-index:${CATALOG_INDEX_TAG}"
       secrets:
         - name: rhdh-secrets
   database:
