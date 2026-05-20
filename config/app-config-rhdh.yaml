@@ -1,13 +1,20 @@
 app:
-  baseUrl: "${RHDH_BASE_URL}"
+  baseUrl: '${RHDH_BASE_URL}'
 backend:
-  baseUrl: "${RHDH_BASE_URL}"
+  baseUrl: '${RHDH_BASE_URL}'
   cors:
-    origin: "${RHDH_BASE_URL}"
+    origin: '${RHDH_BASE_URL}'
+  csp:
+    connect-src:
+      - "'self'"
+      - 'http:'
+      - 'https:'
+    img-src:
+      - "'self'"
+      - 'data:'
 
 auth:
   # see https://backstage.io/docs/auth/ to learn about auth providers
-  environment: production
   session:
     secret: superSecretSecret 
   providers:

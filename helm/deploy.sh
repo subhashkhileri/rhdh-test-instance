@@ -11,9 +11,6 @@ namespace="$1"
 version="$2"
 github=0 # by default don't use the Github repo unless the chart doesn't exist in the OCI registry
 
-# Get cluster router base
-export CLUSTER_ROUTER_BASE=$(oc get route console -n openshift-console -o=jsonpath='{.spec.host}' | sed 's/^[^.]*\.//')
-
 # Validate version and determine chart version
 if [[ "$version" =~ ^([0-9]+(\.[0-9]+)?)$ ]]; then
     CV=$(curl -s "https://quay.io/api/v1/repository/rhdh/chart/tag/?onlyActiveTags=true&limit=600" | jq -r '.tags[].name' | grep "^${version}-" | sort -V | tail -n 1)
@@ -27,6 +24,14 @@ fi
 
 echo "Using Helm chart version: ${CV}"
 
+# Catalog index tag defaults to the major.minor version, or "next" for next
+if [[ "$version" == "next" ]]; then
+    CATALOG_INDEX_TAG="${CATALOG_INDEX_TAG:-next}"
+else
+    CATALOG_INDEX_TAG="${CATALOG_INDEX_TAG:-$(echo "$version" | grep -oE '^[0-9]+\.[0-9]+')}"
+fi
+echo "Using catalog index tag: ${CATALOG_INDEX_TAG}"
+
 CHART_URL="oci://quay.io/rhdh/chart"
 if ! helm show chart $CHART_URL --version $CV &> /dev/null; then github=1; fi
 if [[ $github -eq 1 ]]; then
@@ -36,18 +41,79 @@ fi
 
 echo "Using ${CHART_URL} to install Helm chart"
 
-# RHDH URL
-export RHDH_BASE_URL="https://redhat-developer-hub-${namespace}.${CLUSTER_ROUTER_BASE}"
+# Install orchestrator infrastructure if requested
+if [[ "${WITH_ORCHESTRATOR}" == "1" ]]; then
+    echo "Installing orchestrator infrastructure chart..."
+    # Check if operators are already installed on the cluster (cluster-scoped, shared across namespaces)
+    if oc get pods -n openshift-serverless --no-headers 2>/dev/null | grep -q . && \
+       oc get pods -n openshift-serverless-logic --no-headers 2>/dev/null | grep -q .; then
+        echo "Serverless operators already running on cluster, skipping infra chart."
+    else
+        INFRA_ARGS=(--version "$CV" --namespace "$namespace"
+            --wait --timeout=5m
+            --set serverlessLogicOperator.subscription.spec.installPlanApproval=Automatic
+            --set serverlessOperator.subscription.spec.installPlanApproval=Automatic)
+        # Skip CRDs if they already exist (e.g. installed by OLM)
+        if oc get crd knativeservings.operator.knative.dev &>/dev/null; then
+            INFRA_ARGS+=(--skip-crds)
+        fi
+        helm install orchestrator-infra oci://quay.io/rhdh/orchestrator-infra-chart "${INFRA_ARGS[@]}"
+        echo "Orchestrator infrastructure chart installed successfully."
+    fi
 
-# Apply secrets
-envsubst < config/rhdh-secrets.yaml | oc apply -f - --namespace="$namespace"
+    # Wait for operator pods to appear
+    echo "Waiting for serverless operator pods..."
+    until [[ "$(oc get pods -n openshift-serverless --no-headers 2>/dev/null | wc -l)" -gt 0 ]]; do sleep 5; done
+    until [[ "$(oc get pods -n openshift-serverless-logic --no-headers 2>/dev/null | wc -l)" -gt 0 ]]; do sleep 5; done
+    echo "Serverless operator pods are running."
+fi
 
-# Install/upgrade Helm chart
-helm upgrade redhat-developer-hub -i "${CHART_URL}" --version "$CV" \
-    -f "helm/value_file.yaml" \
-    -f <(echo "global:"; echo "  dynamic:"; cat config/dynamic-plugins.yaml | sed 's/^/    /') \
-    --set global.clusterRouterBase="${CLUSTER_ROUTER_BASE}" \
-    --namespace="$namespace"
+# Build dynamic plugins value file.
+# Read from the cluster ConfigMap seeded in deploy.sh and augmented by any
+# plugin setup scripts. Fall back to config/dynamic-plugins.yaml if the
+# ConfigMap is not available (e.g. standalone helm/deploy.sh execution).
+DYNAMIC_PLUGINS_FILE=$(mktemp)
+trap "rm -f $DYNAMIC_PLUGINS_FILE" EXIT
+echo "global:" > "$DYNAMIC_PLUGINS_FILE"
+echo "  dynamic:" >> "$DYNAMIC_PLUGINS_FILE"
+# Escape {{inherit}} for Helm's Go template engine: {{inherit}} -> {{ "{{inherit}}" }}
+if oc get configmap dynamic-plugins --namespace "$namespace" &>/dev/null; then
+    oc get configmap dynamic-plugins \
+        --namespace "$namespace" \
+        -o jsonpath='{.data.dynamic-plugins\.yaml}' \
+        | sed -e 's/^/    /' -e 's/{{inherit}}/{{ "{{inherit}}" }}/g' \
+        >> "$DYNAMIC_PLUGINS_FILE"
+else
+    sed -e 's/^/    /' -e 's/{{inherit}}/{{ "{{inherit}}" }}/g' \
+        config/dynamic-plugins.yaml >> "$DYNAMIC_PLUGINS_FILE"
+fi
 
-# Restart the deployment to ensure fresh pods
-oc rollout restart deployment/redhat-developer-hub -n "$namespace"
+# Build helm install arguments
+HELM_ARGS=(
+    -f "helm/value_file.yaml"
+    -f "$DYNAMIC_PLUGINS_FILE"
+    --set global.clusterRouterBase="${CLUSTER_ROUTER_BASE}"
+    --set global.catalogIndex.image.registry="quay.io"
+    --set global.catalogIndex.image.repository="rhdh/plugin-catalog-index"
+    --set global.catalogIndex.image.tag="${CATALOG_INDEX_TAG}"
+    --namespace "$namespace"
+)
+
+if [[ "${WITH_ORCHESTRATOR}" == "1" ]]; then
+    HELM_ARGS+=(--set orchestrator.enabled=true)
+fi
+
+if [[ "${IS_AUTH_ENABLED:-false}" != "true" ]]; then
+    HELM_ARGS+=(
+        --set "upstream.backstage.extraAppConfig[1].configMapRef=app-config-guest-auth"
+        --set "upstream.backstage.extraAppConfig[1].filename=app-config-guest-auth.yaml"
+    )
+fi
+
+# Install or upgrade Helm chart
+helm upgrade --install redhat-developer-hub "${CHART_URL}" --version "$CV" "${HELM_ARGS[@]}"
+
+# Scale down and up to ensure fresh pods (helm does not monitor config changes)
+oc scale deployment -l 'app.kubernetes.io/instance in (redhat-developer-hub,developer-hub)' --replicas=0 -n "$namespace"
+oc wait --for=delete pod -l 'app.kubernetes.io/instance in (redhat-developer-hub,developer-hub),app.kubernetes.io/name!=postgresql' -n "$namespace" --timeout=120s || true
+oc scale deployment -l 'app.kubernetes.io/instance in (redhat-developer-hub,developer-hub)' --replicas=1 -n "$namespace"
